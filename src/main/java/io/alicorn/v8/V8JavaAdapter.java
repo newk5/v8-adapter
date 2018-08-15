@@ -1,6 +1,9 @@
 package io.alicorn.v8;
 
 import com.eclipsesource.v8.*;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.sql.Timestamp;
 
 import java.util.*;
 
@@ -13,11 +16,25 @@ public final class V8JavaAdapter {
 
     // Mapping of V8 instances to their associated caches.
     private static final Map<V8, V8JavaCache> runtimeToCacheMap = new WeakHashMap<V8, V8JavaCache>();
+    private static Map<V8, LinkedHashSet> temporaryObjects = new HashMap<V8, LinkedHashSet>();
+
+    public static void nullTemporaryGlobals(V8 v8) {
+        LinkedHashSet<String> set = temporaryObjects.get(v8);
+        if (set != null) {
+            for (String var : set) {
+                v8.executeVoidScript(var + "=null;");
+            }
+
+            set.clear();
+            temporaryObjects.put(v8, set);
+        }
+    }
 
     /**
      * Returns the {@link V8JavaCache} associated with a given runtime.
      *
-     * If a cache for that runtime does not exist, one will be created when this method is invoked.
+     * If a cache for that runtime does not exist, one will be created when this
+     * method is invoked.
      *
      * @param v8 V8 runtime to retrieve the cache for.
      *
@@ -36,21 +53,26 @@ public final class V8JavaAdapter {
     /**
      * Injects an existing Java object into V8 as a variable.
      *
-     * If the passed object represents a primitive array (e.g., String[], Object[], int[]),
-     * the array will be unwrapped and injected into the V8 context as an ArrayList. Any
-     * modifications made to the injected list will not be passed back up to the Java runtime.
+     * If the passed object represents a primitive array (e.g., String[],
+     * Object[], int[]), the array will be unwrapped and injected into the V8
+     * context as an ArrayList. Any modifications made to the injected list will
+     * not be passed back up to the Java runtime.
      *
-     * This method will immediately invoke {@link #injectClass(String, Class, V8Object)}
-     * before injecting the object, causing the object's class to be automatically
-     * injected into the V8 Object if it wasn't already.
+     * This method will immediately invoke
+     * {@link #injectClass(String, Class, V8Object)} before injecting the
+     * object, causing the object's class to be automatically injected into the
+     * V8 Object if it wasn't already.
      *
-     * <b>NOTE: </b> If you wish to use an interceptor for the class of an injected object,
-     * you must explicitly invoke {@link #injectClass(Class, V8JavaClassInterceptor, V8Object)} or
-     * {@link #injectClass(String, Class, V8JavaClassInterceptor, V8Object)}. This method will
+     * <b>NOTE: </b> If you wish to use an interceptor for the class of an
+     * injected object, you must explicitly invoke
+     * {@link #injectClass(Class, V8JavaClassInterceptor, V8Object)} or
+     * {@link #injectClass(String, Class, V8JavaClassInterceptor, V8Object)}.
+     * This method will
      * <b>NOT</b> specify an interceptor automatically for the injected object.
      *
-     * @param name Name of the variable to assign the Java object to. If this value is null,
-     *             a UUID will be automatically generated and used as the name of the variable.
+     * @param name Name of the variable to assign the Java object to. If this
+     * value is null, a UUID will be automatically generated and used as the
+     * name of the variable.
      * @param object Java object to inject.
      * @param rootObject {@link V8Object} to inject the Java object into.
      *
@@ -73,15 +95,24 @@ public final class V8JavaAdapter {
             }
             return injectObject(name, injectedArray, rootObject);
         } else {
-            injectClass("".equals(object.getClass().getSimpleName()) ?
-                                object.getClass().getName().replaceAll("\\.+", "_") :
-                                object.getClass().getSimpleName(),
-                        object.getClass(),
-                        rootObject);
+            injectClass("".equals(object.getClass().getSimpleName())
+                    ? object.getClass().getName().replaceAll("\\.+", "_")
+                    : object.getClass().getSimpleName(),
+                    object.getClass(),
+                    rootObject);
         }
 
         if (name == null) {
             name = "TEMP" + UUID.randomUUID().toString().replaceAll("-", "");
+            V8 v8 = V8JavaObjectUtils.getRuntimeSarcastically(rootObject);
+            LinkedHashSet set = temporaryObjects.get(v8);
+            if (set == null) {
+                LinkedHashSet<String> objectNames = new LinkedHashSet<String>();
+                objectNames.add(name);
+                temporaryObjects.put(v8, objectNames);
+            } else {
+                set.add(name);
+            }
         }
 
         //Build an empty object instance.
@@ -105,15 +136,16 @@ public final class V8JavaAdapter {
     /**
      * Injects a Java class into a V8 object as a prototype.
      *
-     * The injected "class" will be equivalent to a Java Script prototype with
-     * a name identical to the one specified when invoking this function. For
-     * example, the java class {@code com.foo.Bar} could be new'd from the Java Script
-     * context by invoking {@code new Bar()} if {@code "Bar"} was passed as the
-     * name use when injecting the class.
+     * The injected "class" will be equivalent to a Java Script prototype with a
+     * name identical to the one specified when invoking this function. For
+     * example, the java class {@code com.foo.Bar} could be new'd from the Java
+     * Script context by invoking {@code new Bar()} if {@code "Bar"} was passed
+     * as the name use when injecting the class.
      *
      * @param name Name to use when injecting the class into the V8 object.
      * @param classy Java class to inject.
-     * @param interceptor {@link V8JavaClassInterceptor} to use with this class. Pass null if no interceptor is desired.
+     * @param interceptor {@link V8JavaClassInterceptor} to use with this class.
+     * Pass null if no interceptor is desired.
      * @param rootObject {@link V8Object} to inject the Java class into.
      */
     public static void injectClass(String name, Class<?> classy, V8JavaClassInterceptor interceptor, V8Object rootObject) {
@@ -158,9 +190,116 @@ public final class V8JavaAdapter {
                 for (V8JavaStaticMethodProxy method : proxy.getStaticMethods()) {
                     constructorFunction.registerJavaMethod(method, method.getMethodName());
                 }
+                /*injectFinalStaticProperties(classy, constructorFunction);
 
+                for (Class c : classy.getDeclaredClasses()) {
+                    if (!c.getSimpleName().equalsIgnoreCase(name)) {
+                        V8Object innerObj = new V8Object(constructorFunction.getRuntime());
+                        injectFinalStaticProperties(c, innerObj);
+                        constructorFunction.add(c.getSimpleName(), innerObj);
+                        innerObj.release();
+                    }
+                }
+                 */
                 //Clean up after ourselves.
                 constructorFunction.release();
+
+            }
+        }
+    }
+
+    public static void injectEnumOrdinals(Class c, V8 v8) {
+        StringBuilder sb = new StringBuilder();
+        if (c.isEnum()) {
+            for (int i = 0; i < c.getEnumConstants().length; i++) {
+                Object obj = c.getEnumConstants()[i];
+                sb.append(obj.toString()).append(":").append(i);
+                if (!((c.getEnumConstants().length - 1) == i)) {
+                    sb.append(",");
+                }
+            }
+            if (c.getEnumConstants().length > 0) {
+                v8.executeVoidScript("var " + c.getSimpleName() + "= {" + sb.toString() + "};");
+            }
+        }
+    }
+
+    public static void injectEnumOrdinals(String name, Class c, V8 v8) {
+        StringBuilder sb = new StringBuilder();
+        if (c.isEnum()) {
+            for (int i = 0; i < c.getEnumConstants().length; i++) {
+                Object obj = c.getEnumConstants()[i];
+                sb.append(obj.toString()).append(":").append(i);
+                if (!((c.getEnumConstants().length - 1) == i)) {
+                    sb.append(",");
+                }
+            }
+            if (c.getEnumConstants().length > 0) {
+                v8.executeVoidScript("var " + name + "= {" + sb.toString() + "};");
+            }
+        }
+    }
+
+    public static void injectEnumOrdinalsIntoGlobalObj(Class c, String globalObject, String propertyName, V8 v8) {
+
+        boolean createInnnerObj = propertyName != null;
+        if (c.isEnum()) {
+            if (createInnnerObj) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < c.getEnumConstants().length; i++) {
+                    Object obj = c.getEnumConstants()[i];
+                    sb.append(obj.toString()).append(":").append(i);
+                    if (!((c.getEnumConstants().length - 1) == i)) {
+                        sb.append(",");
+                    }
+                }
+                if (c.getEnumConstants().length > 0) {
+                    v8.executeVoidScript(globalObject + "." + propertyName + "={ " + sb.toString() + " };");
+                }
+            } else {
+                for (int i = 0; i < c.getEnumConstants().length; i++) {
+                    Object obj = c.getEnumConstants()[i];
+                    StringBuilder sb = new StringBuilder();
+
+                    sb.append(globalObject).append(".").append(obj.toString()).append("=").append(i).append(";");
+                    v8.executeVoidScript(sb.toString());
+
+                }
+            }
+        }
+    }
+
+    private static void injectFinalStaticProperties(Class<?> classy, V8Object jsObject) {
+        //register public properties
+        Field[] fields = classy.getDeclaredFields();
+
+        for (Field f : fields) {
+            if (Modifier.isPublic(f.getModifiers()) && Modifier.isFinal(f.getModifiers())) {
+                // Define property on JS object.
+                V8Object object = V8JavaObjectUtils.getRuntimeSarcastically(jsObject).getObject("Object");
+                try {
+                    if (f.getType() == int.class || f.getType() == Integer.class) {
+                        object.add("value", f.getInt(null));
+                    } else if (f.getType() == double.class || f.getType() == Double.class) {
+                        object.add("value", f.getDouble(null));
+                    } else if (f.getType() == boolean.class || f.getType() == Boolean.class) {
+                        object.add("value", f.getBoolean(null));
+                    } else if (f.getType() == float.class || f.getType() == Float.class) {
+                        object.add("value", f.getFloat(null));
+                    } else if (f.getType() == String.class) {
+                        object.add("value", f.get(null).toString());
+                    }
+                    object.add("writable", true);
+                    object.add("enumerable", true);
+                    object.add("configurable", true);
+                } catch (IllegalArgumentException illegalArgumentException) {
+                } catch (IllegalAccessException illegalAccessException) {
+                }
+
+                // Create a new JS object.
+                V8Object ret = (V8Object) object.executeJSFunction("defineProperty", jsObject, f.getName(), object);
+                ret.release();
+                object.release();
             }
         }
     }

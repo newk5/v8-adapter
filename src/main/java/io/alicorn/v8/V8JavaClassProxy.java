@@ -2,12 +2,17 @@ package io.alicorn.v8;
 
 import com.eclipsesource.v8.*;
 import io.alicorn.v8.annotations.*;
+import java.io.IOException;
 
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.*;
 
 /**
@@ -54,14 +59,14 @@ final class V8JavaClassProxy implements JavaCallback {
 //            }
 //        }));
 //    }
-
     /**
      * Creates a new {@link V8JavaInstanceMethodProxy} for a given Java method.
      *
      * @param cache {@link V8JavaCache} to assign the proxy to.
      * @param method Java method to proxy.
      *
-     * @return A new {@link V8JavaInstanceMethodProxy} for the given Java method.
+     * @return A new {@link V8JavaInstanceMethodProxy} for the given Java
+     * method.
      */
     private static V8JavaInstanceMethodProxy newInstanceProxy(V8JavaCache cache, Method method) {
         V8JavaInstanceMethodProxy methodProxy = new V8JavaInstanceMethodProxy(method.getName(), cache);
@@ -71,15 +76,18 @@ final class V8JavaClassProxy implements JavaCallback {
     }
 
     /**
-     * Gets the equivalent Javascript property name based on the name of a Java method.
+     * Gets the equivalent Javascript property name based on the name of a Java
+     * method.
      *
-     * TODO: This method is used only statically, so varargs is inappropriate and will
-     *       generate garbage during class injection. Optimize?
+     * TODO: This method is used only statically, so varargs is inappropriate
+     * and will generate garbage during class injection. Optimize?
      *
-     * @param methodName Java method name to get the equivalent Javascript property name of.
+     * @param methodName Java method name to get the equivalent Javascript
+     * property name of.
      * @param propertyPrefixes Possible prefixes the Java method name can have.
      *
-     * @return The equivalent Javascript property name based on the name of the Java method.
+     * @return The equivalent Javascript property name based on the name of the
+     * Java method.
      */
     private static String getJsGetterSetterPropertyName(String methodName, String... propertyPrefixes) {
 
@@ -94,35 +102,41 @@ final class V8JavaClassProxy implements JavaCallback {
 
         // Convert the first character to lower case if it is not already lower case.
         if (Character.isUpperCase(propertyName.charAt(0))) {
+            //if the property name is all  uppercase do not change the first letter to lowercase
+            if (propertyName.equals(propertyName.toUpperCase())) {
+                return propertyName;
+            }
             propertyName = Character.toLowerCase(propertyName.charAt(0)) + propertyName.substring(1);
+
         }
 
         return propertyName;
     }
 
     /**
-     * Checks if a given Java method name has a prefix associated with a Bean-style getter or setter prefix.
+     * Checks if a given Java method name has a prefix associated with a
+     * Bean-style getter or setter prefix.
      *
      * @param methodName Java method name to check the prefix of.
      * @param propertyPrefix Prefix to check for.
      *
-     * @return True if the Java method name has the given prefix, and false otherwise.
+     * @return True if the Java method name has the given prefix, and false
+     * otherwise.
      */
     private static boolean hasPrefix(String methodName, String propertyPrefix) {
         return methodName.length() > propertyPrefix.length() && methodName.startsWith(propertyPrefix);
     }
 
 //Protected////////////////////////////////////////////////////////////////////
-
     /**
-     * @return All static methods associated with the class this proxy represents.
+     * @return All static methods associated with the class this proxy
+     * represents.
      */
     List<V8JavaStaticMethodProxy> getStaticMethods() {
         return new ArrayList<V8JavaStaticMethodProxy>(staticMethods.values());
     }
 
 //Public///////////////////////////////////////////////////////////////////////
-
     public V8JavaClassProxy(Class<?> classy, V8JavaClassInterceptor interceptor, V8JavaCache cache) {
         this.classy = classy;
         this.interceptor = interceptor;
@@ -131,7 +145,6 @@ final class V8JavaClassProxy implements JavaCallback {
         // TODO: Do we want to cache methods from non-final classes to reduce
         //       the memory footprint of multiple classes with a common base?
         // TODO: Consider adding support for getter/setter generation being optional in order to reduce memory overhead?
-
         // Disable auto-detection of methods if the class has the autodetect disable annotation.
         final boolean autoDetect = !classy.isAnnotationPresent(JSDisableMethodAutodetect.class);
 
@@ -170,11 +183,11 @@ final class V8JavaClassProxy implements JavaCallback {
                         final String setterPropertyName = getJsGetterSetterPropertyName(methodName, BEAN_SETTER_PREFIX);
                         settersMap.put(setterPropertyName, newInstanceProxy(cache, m));
 
-                    } else if (autoDetect &&
-                              (hasPrefix(methodName, BEAN_GETTER_PREFIX) || hasPrefix(methodName, BEAN_BOOLEAN_GETTER_PREFIX)) ||
-                               m.isAnnotationPresent(JSGetter.class)) {
+                    } else if (autoDetect
+                            && (hasPrefix(methodName, BEAN_GETTER_PREFIX) || hasPrefix(methodName, BEAN_BOOLEAN_GETTER_PREFIX))
+                            || m.isAnnotationPresent(JSGetter.class)) {
                         final String getterPropertyName = getJsGetterSetterPropertyName(methodName, BEAN_GETTER_PREFIX,
-                                                                                        BEAN_BOOLEAN_GETTER_PREFIX);
+                                BEAN_BOOLEAN_GETTER_PREFIX);
                         gettersMap.put(getterPropertyName, newInstanceProxy(cache, m));
                     }
                 }
@@ -185,8 +198,8 @@ final class V8JavaClassProxy implements JavaCallback {
     /**
      * Returns the {@link V8JavaClassInterceptor} associated with this class.
      *
-     * @return The {@link V8JavaClassInterceptor} associated with this class,
-     *         or null if none exists.
+     * @return The {@link V8JavaClassInterceptor} associated with this class, or
+     * null if none exists.
      */
     public V8JavaClassInterceptor getInterceptor() {
         return interceptor;
@@ -234,7 +247,7 @@ final class V8JavaClassProxy implements JavaCallback {
                     }
                     return;
                 }
-                V8Array args = V8JavaObjectUtils.translateJavaArgumentsToJavascript(new Object[] {context}, V8JavaObjectUtils.getRuntimeSarcastically(jsObject), cache);
+                V8Array args = V8JavaObjectUtils.translateJavaArgumentsToJavascript(new Object[]{context}, V8JavaObjectUtils.getRuntimeSarcastically(jsObject), cache);
                 ((V8Function) function).call(jsObject, args);
                 args.release();
             }
@@ -249,8 +262,8 @@ final class V8JavaClassProxy implements JavaCallback {
     }
 
     /**
-     * Restores the Java state of a {@link V8Object} that was intercepted
-     * by an {@link V8JavaClassInterceptor}.
+     * Restores the Java state of a {@link V8Object} that was intercepted by an
+     * {@link V8JavaClassInterceptor}.
      *
      * This method will do nothing if the specified V8Object does not have a
      * Java object handle or Java class interceptor handle.
@@ -279,7 +292,7 @@ final class V8JavaClassProxy implements JavaCallback {
             // Invoke the injection callback if present.
             Object function = jsObject.get("onJ2V8Extract");
             if (function instanceof V8Function) {
-                V8Array args = V8JavaObjectUtils.translateJavaArgumentsToJavascript(new Object[] {context}, V8JavaObjectUtils.getRuntimeSarcastically(jsObject), cache);
+                V8Array args = V8JavaObjectUtils.translateJavaArgumentsToJavascript(new Object[]{context}, V8JavaObjectUtils.getRuntimeSarcastically(jsObject), cache);
                 ((V8Function) function).call(jsObject, args);
                 args.release();
 
@@ -310,7 +323,8 @@ final class V8JavaClassProxy implements JavaCallback {
      *
      * @return String identifier for the final java script object.
      *
-     * @throws IllegalArgumentException If the passed object is not an instance of the class this proxy represents.
+     * @throws IllegalArgumentException If the passed object is not an instance
+     * of the class this proxy represents.
      */
     public String attachJavaObjectToJsObject(Object javaObject, V8Object jsObject) throws IllegalArgumentException {
         if (javaObject.getClass().equals(classy)) {
@@ -338,7 +352,7 @@ final class V8JavaClassProxy implements JavaCallback {
                     // Despite being unchecked, we can guarantee that this is correct so long as the provided
                     // interceptor is of the correct type. TODO: Maybe we could add an assert on the interceptor type?
                     interceptor.onInject(context, classy.cast(javaObject));
-                    V8Array args = V8JavaObjectUtils.translateJavaArgumentsToJavascript(new Object[] {context}, V8JavaObjectUtils.getRuntimeSarcastically(jsObject), cache);
+                    V8Array args = V8JavaObjectUtils.translateJavaArgumentsToJavascript(new Object[]{context}, V8JavaObjectUtils.getRuntimeSarcastically(jsObject), cache);
                     ((V8Function) function).call(jsObject, args);
                     args.release();
                 }
@@ -362,7 +376,7 @@ final class V8JavaClassProxy implements JavaCallback {
             return instanceAddress;
         } else {
             throw new IllegalArgumentException(String.format("Cannot attach Java object of type [%s] using proxy for type [%s]",
-                                                             javaObject.getClass().getName(), classy.getName()));
+                    javaObject.getClass().getName(), classy.getName()));
         }
     }
 
@@ -370,9 +384,9 @@ final class V8JavaClassProxy implements JavaCallback {
      * Injects getter and setter properties into the given JS object.
      *
      * @param javaObject Java object which is "injected" in JS. Required for
-     *                   re-direction of the property access to it's getters/setters.
-     * @param jsObject JS object created for dispatching calls from JS runtime to
-     *                 initial java object.
+     * re-direction of the property access to it's getters/setters.
+     * @param jsObject JS object created for dispatching calls from JS runtime
+     * to initial java object.
      */
     private void injectGetterAndSetterProperties(Object javaObject, V8Object jsObject) {
         final Set<String> gettersAndSetters = new HashSet<String>();
@@ -404,15 +418,53 @@ final class V8JavaClassProxy implements JavaCallback {
             ret.release();
             methodProperty.release();
         }
+        injectFinalStaticProperties(javaObject, jsObject);
+    }
+
+    private void injectFinalStaticProperties(Object javaObject, V8Object jsObject) {
+        //register public properties
+        Field[] fields = javaObject.getClass().getDeclaredFields();
+
+        for (Field f : fields) {
+            if (Modifier.isPublic(f.getModifiers()) && Modifier.isFinal(f.getModifiers())) {
+                // Define property on JS object.
+                V8Object object = V8JavaObjectUtils.getRuntimeSarcastically(jsObject).getObject("Object");
+                try {
+                    if (f.getType() == int.class || f.getType() == Integer.class) {
+                        object.add("value", f.getInt(null));
+                    } else if (f.getType() == double.class || f.getType() == Double.class) {
+                        object.add("value", f.getDouble(null));
+                    } else if (f.getType() == boolean.class || f.getType() == Boolean.class) {
+                        object.add("value", f.getBoolean(null));
+                    } else if (f.getType() == float.class || f.getType() == Float.class) {
+                        object.add("value", f.getFloat(null));
+                    } else if (f.getType() == String.class) {
+                        object.add("value", f.get(null).toString());
+                    }
+                    object.add("writable", true);
+                    object.add("enumerable", true);
+                    object.add("configurable", true);
+                } catch (IllegalArgumentException illegalArgumentException) {
+                } catch (IllegalAccessException illegalAccessException) {
+                }
+
+                // Create a new JS object.
+                V8Object ret = (V8Object) object.executeJSFunction("defineProperty", jsObject, f.getName(), object);
+                ret.release();
+                object.release();
+            }
+        }
     }
 
     /**
-     * Creates a new Java object representing the type associated with this proxy.
+     * Creates a new Java object representing the type associated with this
+     * proxy.
      *
      * @param receiver Java Script object that will represent the Java object.
      * @param parameters Parameters to use when constructing the Java object.
      */
-    @Override public Object invoke(V8Object receiver, V8Array parameters) {
+    @Override
+    public Object invoke(V8Object receiver, V8Array parameters) {
         //Attempt to discover a matching constructor for the arguments we've been passed.
         Object[] coercedArguments = null;
         Constructor coercedConstructor = null;
